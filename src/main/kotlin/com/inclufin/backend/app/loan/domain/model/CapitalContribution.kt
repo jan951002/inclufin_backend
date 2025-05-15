@@ -5,5 +5,5 @@ import java.math.BigDecimal
 data class CapitalContribution(
     val startMonth: Int,
     val contributionAmount: BigDecimal,
-    val type: CapitalContributionType = CapitalContributionType.PRINCIPAL_REDUCTION
+    val types: List<CapitalContributionType> = listOf()
 )

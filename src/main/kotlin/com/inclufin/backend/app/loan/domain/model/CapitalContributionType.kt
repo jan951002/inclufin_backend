@@ -1,6 +1,7 @@
 package com.inclufin.backend.app.loan.domain.model
 
 enum class CapitalContributionType {
-    PRINCIPAL_REDUCTION,
-    INSTALLMENT_REDUCTION
+    REDUCED_TERM,
+    REDUCED_RATE,
+    ALL
 }

@@ -1,12 +1,13 @@
 package com.inclufin.backend.app.loan.domain.service.impl
 
+import com.inclufin.backend.app.loan.domain.config.LoanCalculationConfig.DEFAULT_ROUNDING_MODE
+import com.inclufin.backend.app.loan.domain.config.LoanCalculationConfig.MC_CALCULATION
+import com.inclufin.backend.app.loan.domain.config.LoanCalculationConfig.ONE_HUNDRED
 import com.inclufin.backend.app.loan.domain.model.InterestRateType
 import com.inclufin.backend.app.loan.domain.model.Rate
 import com.inclufin.backend.app.loan.domain.service.RateConverter
 import org.springframework.stereotype.Service
 import java.math.BigDecimal
-import java.math.MathContext
-import java.math.RoundingMode
 import kotlin.math.pow
 
 @Service
@@ -30,7 +31,7 @@ class RateConversionServiceImpl : RateConverter {
     override fun convertToMonthlyRate(rate: Rate): Rate {
         return when (rate.type) {
             InterestRateType.EFFECTIVE_ANNUAL -> {
-                val annualRateDecimal = rate.percentage.divide(ONE_HUNDRED, MATH_CONTEXT)
+                val annualRateDecimal = rate.percentage.divide(ONE_HUNDRED, MC_CALCULATION)
                 val annualFactor = BigDecimal.ONE + annualRateDecimal
                 val monthlyFactorDouble = annualFactor.toDouble().pow(MONTHLY_EXPONENT)
                 val monthlyFactor = BigDecimal(monthlyFactorDouble.toString())
@@ -64,12 +65,11 @@ class RateConversionServiceImpl : RateConverter {
     override fun convertToAnnualRate(rate: Rate): Rate {
         return when (rate.type) {
             InterestRateType.NOMINAL_MONTHLY_DUE -> {
-                val monthlyRateDecimal = rate.percentage.divide(ONE_HUNDRED, MATH_CONTEXT)
+                val monthlyRateDecimal = rate.percentage.divide(ONE_HUNDRED, MC_CALCULATION)
                 val monthlyFactor = BigDecimal.ONE + monthlyRateDecimal
-                val annualFactor = monthlyFactor.pow(MONTHS_IN_YEAR, MATH_CONTEXT)
+                val annualFactor = monthlyFactor.pow(MONTHS_IN_YEAR, MC_CALCULATION)
                 val annualRateDecimal = annualFactor - BigDecimal.ONE
                 val annualRateValue = annualRateDecimal.multiply(ONE_HUNDRED)
-                    .setScale(FINAL_SCALE, DEFAULT_ROUNDING_MODE)
 
                 Rate(
                     annualRateValue,
@@ -82,12 +82,8 @@ class RateConversionServiceImpl : RateConverter {
     }
 
     companion object {
-        private val ONE_HUNDRED = BigDecimal(100)
         private const val MONTHS_IN_YEAR = 12
         private const val MONTHLY_EXPONENT = 1.0 / MONTHS_IN_YEAR
         private const val FINAL_SCALE = 10
-        private const val CALCULATION_PRECISION = 20
-        private val DEFAULT_ROUNDING_MODE = RoundingMode.HALF_UP
-        private val MATH_CONTEXT = MathContext(CALCULATION_PRECISION, DEFAULT_ROUNDING_MODE)
     }
 }
