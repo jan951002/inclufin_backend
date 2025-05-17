@@ -57,10 +57,12 @@ class ReducedRatePaymentCalculatorServiceImpl(
             } else {
                 initialInstallmentAmountPrecise
             }
+            var additionalToPay = BigDecimal.ZERO
 
             val additionalPrincipalPaidPrecise = if (i + 1 >= capitalContribution.startMonth) {
                 if (currentBalance > totalPaymentForMonthPrecise) {
-                    totalPaymentForMonthPrecise - interestPaidPrecise + capitalContribution.contributionAmount
+                    additionalToPay = capitalContribution.contributionAmount
+                    totalPaymentForMonthPrecise - interestPaidPrecise + additionalToPay
                 } else {
                     currentBalance
                 }
@@ -76,7 +78,7 @@ class ReducedRatePaymentCalculatorServiceImpl(
                     initialBalance = currentBalance.roundToDisplayScale(),
                     interestPaid = interestPaidPrecise.roundToDisplayScale(),
                     principalPaid = additionalPrincipalPaidPrecise.roundToDisplayScale(),
-                    totalPayment = totalPaymentForMonthPrecise.roundToDisplayScale(),
+                    totalPayment = (totalPaymentForMonthPrecise + additionalToPay).roundToDisplayScale(),
                     endingBalance = endingBalancePrecise.roundToDisplayScale()
                 )
             )
@@ -88,8 +90,8 @@ class ReducedRatePaymentCalculatorServiceImpl(
             if (currentBalance <= BigDecimal.ZERO) break
         }
 
+        val totalAmountPaidPrecise = installments.sumOf { it.totalPayment }
         val totalInterestPaidPrecise = installments.sumOf { it.interestPaid }
-        val totalAmountPaidPrecise = loanRequest.loanAmount.add(totalInterestPaidPrecise, MC_CALCULATION)
         val interestSaved = calculateInterestSaved(loanRequest, totalInterestPaidPrecise)
         val monthsSaved = loanRequest.termInMonths - monthsPaid
 

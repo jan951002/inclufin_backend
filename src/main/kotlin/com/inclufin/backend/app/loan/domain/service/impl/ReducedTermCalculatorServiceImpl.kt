@@ -79,8 +79,8 @@ class ReducedTermCalculatorServiceImpl(
             if (currentBalance <= BigDecimal.ZERO) break
         }
 
+        val totalAmountPaidPrecise = installments.sumOf { it.totalPayment }
         val totalInterestPaidPrecise = installments.sumOf { it.interestPaid }
-        val totalAmountPaidPrecise = loanRequest.loanAmount.add(totalInterestPaidPrecise, MC_CALCULATION)
         val interestSaved = calculateInterestSaved(this, totalInterestPaidPrecise)
         val monthsSaved = termInMonths - monthsPaid
 
