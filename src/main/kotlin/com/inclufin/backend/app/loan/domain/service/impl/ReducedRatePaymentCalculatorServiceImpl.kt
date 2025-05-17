@@ -8,7 +8,7 @@ import com.inclufin.backend.app.loan.domain.model.LoanRequest
 import com.inclufin.backend.app.loan.domain.model.PaymentPlan
 import com.inclufin.backend.app.loan.domain.model.PaymentPlanType
 import com.inclufin.backend.app.loan.domain.model.Rate
-import com.inclufin.backend.app.loan.domain.model.ReductionDetails
+import com.inclufin.backend.app.loan.domain.model.ReductionDetails.TermReduction
 import com.inclufin.backend.app.loan.domain.service.CapitalRecoveryFactorCalculator
 import com.inclufin.backend.app.loan.domain.service.InterestSavedCalculator
 import com.inclufin.backend.app.loan.domain.service.PeriodicRateCalculator
@@ -23,90 +23,101 @@ class ReducedRatePaymentCalculatorServiceImpl(
     private val interestSavedCalculator: InterestSavedCalculator
 ) : ReducedRatePaymentCalculator {
 
-    override fun calculatePaymentPlan(loanRequest: LoanRequest): PaymentPlan = with(loanRequest) {
-        val capitalContribution = capitalContribution
+
+    override fun calculatePaymentPlan(loanRequest: LoanRequest): PaymentPlan {
+        val capitalContribution = loanRequest.capitalContribution
             ?: throw MissingCapitalContributionException(
-                "Capital contribution information is required for reduced rate calculations."
+                "Capital contribution information is required for reduced term calculations."
             )
-
-        val periodicInterestRate = periodicRateCalculator.calculateDecimalPeriodicRate(interestRate)
-        val totalInstallments = termInMonths
-        val startMonthOfCapitalContribution = capitalContribution.startMonth
-        val monthlyCapitalContribution = capitalContribution.contributionAmount
-        var currentBalance = loanAmount
-
-        // Helper para calcular la cuota francesa: cuota = saldo * CRF(periodicRate, plazo)
-        fun calculateInstallmentAmount(balance: BigDecimal, term: Int): BigDecimal {
-            val crf = capitalRecoveryFactorCalculator.calculate(periodicInterestRate, term)
-            return balance.multiply(crf, MC_CALCULATION)
-        }
+        val periodicInterestRate = getPeriodicInterestRate(loanRequest.interestRate)
+        val initialCapitalRecoveryFactor = calculateCapitalRecoveryFactor(
+            periodicRate = periodicInterestRate,
+            termInMonths = loanRequest.termInMonths
+        )
+        val initialInstallmentAmountPrecise = loanRequest.loanAmount.multiply(
+            initialCapitalRecoveryFactor,
+            MC_CALCULATION
+        )
 
         val installments = mutableListOf<Installment>()
-        val cuotaOriginal = calculateInstallmentAmount(loanAmount, totalInstallments)
+        var currentBalance = loanRequest.loanAmount
+        var totalInterestPaid = BigDecimal.ZERO
+        var monthsPaid = 0
 
-        for (i in 0 until totalInstallments) {
-            val installmentNumber = i + 1
-            val initialBalance = currentBalance
-            val interestPaid = currentBalance.multiply(periodicInterestRate, MC_CALCULATION)
-            val isContributionMonth = installmentNumber == startMonthOfCapitalContribution
-            val plazoRestante = totalInstallments - i
-
-            val currentInstallmentAmount = when {
-                installmentNumber == 1 -> cuotaOriginal
-                else -> calculateInstallmentAmount(currentBalance, plazoRestante)
+        for (i in 0 until loanRequest.termInMonths) {
+            val interestPaidPrecise = currentBalance.multiply(periodicInterestRate, MC_CALCULATION)
+            val totalPaymentForMonthPrecise = if (i + 1 >= capitalContribution.startMonth) {
+                currentBalance.multiply(
+                    calculateCapitalRecoveryFactor(
+                        periodicRate = periodicInterestRate,
+                        termInMonths = loanRequest.termInMonths - i
+                    ),
+                    MC_CALCULATION
+                )
+            } else {
+                initialInstallmentAmountPrecise
             }
 
-            val principalPaid = when {
-                isContributionMonth -> {
-                    val abono = cuotaOriginal.subtract(interestPaid, MC_CALCULATION).add(monthlyCapitalContribution)
-                    if (abono > currentBalance) currentBalance else abono
+            val additionalPrincipalPaidPrecise = if (i + 1 >= capitalContribution.startMonth) {
+                if (currentBalance > totalPaymentForMonthPrecise) {
+                    totalPaymentForMonthPrecise - interestPaidPrecise + capitalContribution.contributionAmount
+                } else {
+                    currentBalance
                 }
-                else -> {
-                    val abono = currentInstallmentAmount.subtract(interestPaid, MC_CALCULATION)
-                    if (abono > currentBalance) currentBalance else abono
-                }
+            } else {
+                totalPaymentForMonthPrecise - interestPaidPrecise
             }
 
-            val totalPayment = when {
-                isContributionMonth -> cuotaOriginal.add(monthlyCapitalContribution)
-                else -> currentInstallmentAmount
-            }
-
-            currentBalance = currentBalance.subtract(principalPaid, MC_CALCULATION)
+            val endingBalancePrecise = currentBalance - additionalPrincipalPaidPrecise
 
             installments.add(
                 Installment(
-                    installmentNumber = installmentNumber,
-                    initialBalance = initialBalance.roundToDisplayScale(),
-                    interestPaid = interestPaid.roundToDisplayScale(),
-                    principalPaid = principalPaid.roundToDisplayScale(),
-                    totalPayment = totalPayment.roundToDisplayScale(),
-                    endingBalance = currentBalance.roundToDisplayScale()
+                    installmentNumber = i + 1,
+                    initialBalance = currentBalance.roundToDisplayScale(),
+                    interestPaid = interestPaidPrecise.roundToDisplayScale(),
+                    principalPaid = additionalPrincipalPaidPrecise.roundToDisplayScale(),
+                    totalPayment = totalPaymentForMonthPrecise.roundToDisplayScale(),
+                    endingBalance = endingBalancePrecise.roundToDisplayScale()
                 )
             )
+
+            totalInterestPaid += interestPaidPrecise
+            currentBalance = endingBalancePrecise
+            monthsPaid++
+
             if (currentBalance <= BigDecimal.ZERO) break
         }
 
-        val lastInstallmentAmountPrecise = installments.lastOrNull()?.totalPayment ?: BigDecimal.ZERO
-        val totalAmountPaidPrecise = installments.sumOf { it.totalPayment }
         val totalInterestPaidPrecise = installments.sumOf { it.interestPaid }
-        val interestSaved = calculateInterestSaved(this, totalInterestPaidPrecise)
+        val totalAmountPaidPrecise = loanRequest.loanAmount.add(totalInterestPaidPrecise, MC_CALCULATION)
+        val interestSaved = calculateInterestSaved(loanRequest, totalInterestPaidPrecise)
+        val monthsSaved = loanRequest.termInMonths - monthsPaid
 
-        PaymentPlan(
+        return PaymentPlan(
             totalAmountPaid = totalAmountPaidPrecise.roundToDisplayScale(),
-            totalInterestPaid = totalInterestPaidPrecise.roundToDisplayScale(),
+            totalInterestPaid = totalInterestPaid.roundToDisplayScale(),
             installments = installments,
             planType = PaymentPlanType.REDUCED_RATE,
-            reductionDetails = ReductionDetails.RateReduction(
+            reductionDetails = TermReduction(
                 interestSaved = interestSaved.roundToDisplayScale(),
-                finalPayment = lastInstallmentAmountPrecise.roundToDisplayScale()
+                monthsSaved = monthsSaved
             )
         )
     }
+
+    private fun getPeriodicInterestRate(
+        rate: Rate
+    ) = periodicRateCalculator.calculateDecimalPeriodicRate(rate)
+
+    private fun calculateCapitalRecoveryFactor(
+        periodicRate: BigDecimal,
+        termInMonths: Int
+    ) = capitalRecoveryFactorCalculator.calculate(
+        periodicRate, termInMonths
+    )
 
     private fun calculateInterestSaved(
         loanRequest: LoanRequest,
         totalInterestPaid: BigDecimal
     ) = interestSavedCalculator.calculate(loanRequest, totalInterestPaid)
-
 }
