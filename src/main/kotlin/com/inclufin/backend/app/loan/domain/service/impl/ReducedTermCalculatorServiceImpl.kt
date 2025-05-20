@@ -11,9 +11,9 @@ import com.inclufin.backend.app.loan.domain.model.PaymentPlanType
 import com.inclufin.backend.app.loan.domain.model.Rate
 import com.inclufin.backend.app.loan.domain.model.ReductionDetails.TermReduction
 import com.inclufin.backend.app.loan.domain.service.CapitalRecoveryFactorCalculator
-import com.inclufin.backend.app.loan.domain.service.ReducedTermPaymentCalculator
 import com.inclufin.backend.app.loan.domain.service.InterestSavedCalculator
 import com.inclufin.backend.app.loan.domain.service.PeriodicRateCalculator
+import com.inclufin.backend.app.loan.domain.service.ReducedTermPaymentCalculator
 import org.springframework.stereotype.Service
 import java.math.BigDecimal
 
@@ -46,24 +46,22 @@ class ReducedTermCalculatorServiceImpl(
         var monthsPaid = 0
 
         for (i in 1..termInMonths) {
-            val interestPaidPrecise = currentBalance.multiply(periodicInterestRate, MC_CALCULATION)
+            val interestPaidPrecise = calculateInterestPaid(currentBalance, periodicInterestRate)
             val principalPaidWithoutContributionPrecise =
-                initialInstallmentAmountPrecise.subtract(interestPaidPrecise, MC_CALCULATION)
+                subtract(initialInstallmentAmountPrecise, interestPaidPrecise)
             var additionalPrincipalPaidPrecise = BigDecimal.ZERO
             var totalPaymentForMonthPrecise = initialInstallmentAmountPrecise
 
             if (i >= capitalContribution.startMonth && currentBalance > BigDecimal.ZERO) {
                 additionalPrincipalPaidPrecise = capitalContribution.contributionAmount.min(currentBalance)
-                totalPaymentForMonthPrecise = initialInstallmentAmountPrecise
-                    .add(capitalContribution.contributionAmount, MC_CALCULATION)
-                    .min(currentBalance.add(interestPaidPrecise, MC_CALCULATION))
+                totalPaymentForMonthPrecise = add(initialInstallmentAmountPrecise, capitalContribution.contributionAmount)
+                    .min(add(currentBalance, interestPaidPrecise))
             }
 
-            val totalPrincipalPaidPrecise = principalPaidWithoutContributionPrecise
-                .add(additionalPrincipalPaidPrecise, MC_CALCULATION)
+            val totalPrincipalPaidPrecise = add(principalPaidWithoutContributionPrecise, additionalPrincipalPaidPrecise)
                 .min(currentBalance)
 
-            val endingBalancePrecise = currentBalance.subtract(totalPrincipalPaidPrecise, MC_CALCULATION)
+            val endingBalancePrecise = subtract(currentBalance, totalPrincipalPaidPrecise)
 
             installments.add(
                 Installment(
@@ -75,20 +73,19 @@ class ReducedTermCalculatorServiceImpl(
                     endingBalance = endingBalancePrecise.roundToDisplayScale()
                 )
             )
-            totalInterestPaid = totalInterestPaid.add(interestPaidPrecise, MC_CALCULATION)
+            totalInterestPaid = add(totalInterestPaid, interestPaidPrecise)
             currentBalance = endingBalancePrecise
             monthsPaid++
 
             if (currentBalance <= BigDecimal.ZERO) break
         }
 
-        val totalAmountPaidPrecise = installments.sumOf { it.totalPayment }
-        val totalInterestPaidPrecise = installments.sumOf { it.interestPaid }
-        val interestSaved = calculateInterestSaved(this, totalInterestPaidPrecise)
+        val totalAmountPaid = installments.sumOf { it.totalPayment }
+        val interestSaved = calculateInterestSaved(this, totalInterestPaid)
         val monthsSaved = termInMonths - monthsPaid
 
         return PaymentPlan(
-            totalAmountPaid = totalAmountPaidPrecise.roundToDisplayScale(),
+            totalAmountPaid = totalAmountPaid.roundToDisplayScale(),
             totalInterestPaid = totalInterestPaid.roundToDisplayScale(),
             installments = installments,
             planType = PaymentPlanType.REDUCED_TERM,
@@ -107,4 +104,16 @@ class ReducedTermCalculatorServiceImpl(
         loanRequest: LoanRequest,
         totalInterestPaid: BigDecimal
     ) = interestSavedCalculator.calculate(loanRequest, totalInterestPaid)
+    
+    private fun calculateInterestPaid(
+        currentBalance: BigDecimal, 
+        periodicInterestRate: BigDecimal
+    ): BigDecimal = 
+        currentBalance.multiply(periodicInterestRate, MC_CALCULATION)
+    
+    private fun add(a: BigDecimal, b: BigDecimal): BigDecimal = 
+        a.add(b, MC_CALCULATION)
+    
+    private fun subtract(a: BigDecimal, b: BigDecimal): BigDecimal = 
+        a.subtract(b, MC_CALCULATION)
 }

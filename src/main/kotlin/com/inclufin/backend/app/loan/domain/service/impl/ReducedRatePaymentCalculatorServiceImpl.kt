@@ -24,53 +24,65 @@ class ReducedRatePaymentCalculatorServiceImpl(
     private val interestSavedCalculator: InterestSavedCalculator
 ) : ReducedRatePaymentCalculator {
 
-
-    override fun calculatePaymentPlan(loanRequest: LoanRequest): PaymentPlan {
-        val capitalContribution = loanRequest.capitalContribution
+    override fun calculatePaymentPlan(loanRequest: LoanRequest): PaymentPlan = with(loanRequest) {
+        val capitalContribution = capitalContribution
             ?: throw MissingCapitalContributionException(
-                "Capital contribution information is required for reduced term calculations."
+                "Capital contribution information is required for reduced rate calculations."
             )
-        val periodicInterestRate = getPeriodicInterestRate(loanRequest.interestRate)
+        val periodicInterestRate = getPeriodicInterestRate(interestRate)
         
-        val initialCrfParams = CapitalRecoveryFactorParams(
+        // Calculate the traditional payment amount
+        val traditionalCrfParams = CapitalRecoveryFactorParams(
             periodicRate = periodicInterestRate,
-            termInMonths = loanRequest.termInMonths,
-            amount = loanRequest.loanAmount
+            termInMonths = termInMonths,
+            amount = loanAmount
         )
         
-        val initialInstallmentAmountPrecise = capitalRecoveryFactorCalculator.calculatePayment(initialCrfParams)
-
+        val traditionalPaymentAmount = capitalRecoveryFactorCalculator.calculatePayment(traditionalCrfParams)
+        
+        // Calculate the reduced payment amount with capital contribution
+        val reducedAmount = loanAmount.subtract(capitalContribution.contributionAmount, MC_CALCULATION)
+        val reducedCrfParams = CapitalRecoveryFactorParams(
+            periodicRate = periodicInterestRate,
+            termInMonths = termInMonths,
+            amount = reducedAmount
+        )
+        
+        val reducedPaymentAmount = capitalRecoveryFactorCalculator.calculatePayment(reducedCrfParams)
+        
+        // Generate payment plan
         val installments = mutableListOf<Installment>()
-        var currentBalance = loanRequest.loanAmount
+        var currentBalance = loanAmount
         var totalInterestPaid = BigDecimal.ZERO
         var monthsPaid = 0
 
-        for (i in 0 until loanRequest.termInMonths) {
+        // Mantener la inicialización de i como 0 para preservar la lógica original
+        for (i in 0 until termInMonths) {
             val interestPaidPrecise = currentBalance.multiply(periodicInterestRate, MC_CALCULATION)
             val totalPaymentForMonthPrecise = if (i + 1 >= capitalContribution.startMonth) {
                 val remainingCrfParams = CapitalRecoveryFactorParams(
                     periodicRate = periodicInterestRate,
-                    termInMonths = loanRequest.termInMonths - i,
+                    termInMonths = termInMonths - i,
                     amount = currentBalance
                 )
                 capitalRecoveryFactorCalculator.calculatePayment(remainingCrfParams)
             } else {
-                initialInstallmentAmountPrecise
+                traditionalPaymentAmount
             }
             var additionalToPay = BigDecimal.ZERO
 
             val additionalPrincipalPaidPrecise = if (i + 1 >= capitalContribution.startMonth) {
                 if (currentBalance > totalPaymentForMonthPrecise) {
                     additionalToPay = capitalContribution.contributionAmount
-                    totalPaymentForMonthPrecise - interestPaidPrecise + additionalToPay
+                    totalPaymentForMonthPrecise.subtract(interestPaidPrecise, MC_CALCULATION).add(additionalToPay, MC_CALCULATION)
                 } else {
                     currentBalance
                 }
             } else {
-                totalPaymentForMonthPrecise - interestPaidPrecise
+                totalPaymentForMonthPrecise.subtract(interestPaidPrecise, MC_CALCULATION)
             }
 
-            val endingBalancePrecise = currentBalance - additionalPrincipalPaidPrecise
+            val endingBalancePrecise = currentBalance.subtract(additionalPrincipalPaidPrecise, MC_CALCULATION)
 
             installments.add(
                 Installment(
@@ -78,25 +90,24 @@ class ReducedRatePaymentCalculatorServiceImpl(
                     initialBalance = currentBalance.roundToDisplayScale(),
                     interestPaid = interestPaidPrecise.roundToDisplayScale(),
                     principalPaid = additionalPrincipalPaidPrecise.roundToDisplayScale(),
-                    totalPayment = (totalPaymentForMonthPrecise + additionalToPay).roundToDisplayScale(),
+                    totalPayment = totalPaymentForMonthPrecise.add(additionalToPay, MC_CALCULATION).roundToDisplayScale(),
                     endingBalance = endingBalancePrecise.roundToDisplayScale()
                 )
             )
 
-            totalInterestPaid += interestPaidPrecise
+            totalInterestPaid = totalInterestPaid.add(interestPaidPrecise, MC_CALCULATION)
             currentBalance = endingBalancePrecise
             monthsPaid++
 
             if (currentBalance <= BigDecimal.ZERO) break
         }
 
-        val totalAmountPaidPrecise = installments.sumOf { it.totalPayment }
-        val totalInterestPaidPrecise = installments.sumOf { it.interestPaid }
-        val interestSaved = calculateInterestSaved(loanRequest, totalInterestPaidPrecise)
-        val monthsSaved = loanRequest.termInMonths - monthsPaid
+        val totalAmountPaid = installments.sumOf { it.totalPayment }
+        val interestSaved = calculateInterestSaved(this, totalInterestPaid)
+        val monthsSaved = termInMonths - monthsPaid
 
         return PaymentPlan(
-            totalAmountPaid = totalAmountPaidPrecise.roundToDisplayScale(),
+            totalAmountPaid = totalAmountPaid.roundToDisplayScale(),
             totalInterestPaid = totalInterestPaid.roundToDisplayScale(),
             installments = installments,
             planType = PaymentPlanType.REDUCED_RATE,
