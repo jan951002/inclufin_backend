@@ -2,6 +2,7 @@ package com.inclufin.backend.app.loan.domain.service.impl
 
 import com.inclufin.backend.app.loan.domain.config.LoanCalculationConfig.MC_CALCULATION
 import com.inclufin.backend.app.loan.domain.config.LoanCalculationConfig.MC_DIVISION
+import com.inclufin.backend.app.loan.domain.model.CapitalRecoveryFactorParams
 import com.inclufin.backend.app.loan.domain.service.CapitalRecoveryFactorCalculator
 import org.springframework.stereotype.Service
 import java.math.BigDecimal
@@ -32,5 +33,10 @@ class CapitalRecoveryFactorCalculatorImpl : CapitalRecoveryFactorCalculator {
         } else {
             numerator.divide(denominator, MC_DIVISION)
         }
+    }
+
+    override fun calculatePayment(periodicRate: BigDecimal, termInMonths: Int, amount: BigDecimal): BigDecimal {
+        val crf = calculate(periodicRate, termInMonths)
+        return amount.multiply(crf, MC_CALCULATION)
     }
 }

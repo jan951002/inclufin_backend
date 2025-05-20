@@ -3,6 +3,7 @@ package com.inclufin.backend.app.loan.domain.service.impl
 import com.inclufin.backend.app.loan.domain.config.LoanCalculationConfig.MC_CALCULATION
 import com.inclufin.backend.app.loan.domain.exception.MissingCapitalContributionException
 import com.inclufin.backend.app.loan.domain.ext.roundToDisplayScale
+import com.inclufin.backend.app.loan.domain.model.CapitalRecoveryFactorParams
 import com.inclufin.backend.app.loan.domain.model.Installment
 import com.inclufin.backend.app.loan.domain.model.LoanRequest
 import com.inclufin.backend.app.loan.domain.model.PaymentPlan
@@ -30,14 +31,14 @@ class ReducedRatePaymentCalculatorServiceImpl(
                 "Capital contribution information is required for reduced term calculations."
             )
         val periodicInterestRate = getPeriodicInterestRate(loanRequest.interestRate)
-        val initialCapitalRecoveryFactor = calculateCapitalRecoveryFactor(
+        
+        val initialCrfParams = CapitalRecoveryFactorParams(
             periodicRate = periodicInterestRate,
-            termInMonths = loanRequest.termInMonths
+            termInMonths = loanRequest.termInMonths,
+            amount = loanRequest.loanAmount
         )
-        val initialInstallmentAmountPrecise = loanRequest.loanAmount.multiply(
-            initialCapitalRecoveryFactor,
-            MC_CALCULATION
-        )
+        
+        val initialInstallmentAmountPrecise = capitalRecoveryFactorCalculator.calculatePayment(initialCrfParams)
 
         val installments = mutableListOf<Installment>()
         var currentBalance = loanRequest.loanAmount
@@ -47,13 +48,12 @@ class ReducedRatePaymentCalculatorServiceImpl(
         for (i in 0 until loanRequest.termInMonths) {
             val interestPaidPrecise = currentBalance.multiply(periodicInterestRate, MC_CALCULATION)
             val totalPaymentForMonthPrecise = if (i + 1 >= capitalContribution.startMonth) {
-                currentBalance.multiply(
-                    calculateCapitalRecoveryFactor(
-                        periodicRate = periodicInterestRate,
-                        termInMonths = loanRequest.termInMonths - i
-                    ),
-                    MC_CALCULATION
+                val remainingCrfParams = CapitalRecoveryFactorParams(
+                    periodicRate = periodicInterestRate,
+                    termInMonths = loanRequest.termInMonths - i,
+                    amount = currentBalance
                 )
+                capitalRecoveryFactorCalculator.calculatePayment(remainingCrfParams)
             } else {
                 initialInstallmentAmountPrecise
             }
@@ -110,13 +110,6 @@ class ReducedRatePaymentCalculatorServiceImpl(
     private fun getPeriodicInterestRate(
         rate: Rate
     ) = periodicRateCalculator.calculateDecimalPeriodicRate(rate)
-
-    private fun calculateCapitalRecoveryFactor(
-        periodicRate: BigDecimal,
-        termInMonths: Int
-    ) = capitalRecoveryFactorCalculator.calculate(
-        periodicRate, termInMonths
-    )
 
     private fun calculateInterestSaved(
         loanRequest: LoanRequest,

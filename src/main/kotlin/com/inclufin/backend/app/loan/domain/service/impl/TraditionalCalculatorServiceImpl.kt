@@ -2,6 +2,7 @@ package com.inclufin.backend.app.loan.domain.service.impl
 
 import com.inclufin.backend.app.loan.domain.config.LoanCalculationConfig.MC_CALCULATION
 import com.inclufin.backend.app.loan.domain.ext.roundToDisplayScale
+import com.inclufin.backend.app.loan.domain.model.CapitalRecoveryFactorParams
 import com.inclufin.backend.app.loan.domain.model.Installment
 import com.inclufin.backend.app.loan.domain.model.LoanRequest
 import com.inclufin.backend.app.loan.domain.model.PaymentPlan
@@ -22,12 +23,14 @@ class TraditionalCalculatorServiceImpl(
     override fun calculatePaymentPlan(loanRequest: LoanRequest): PaymentPlan {
         val periodicInterestRate = getPeriodicInterestRate(loanRequest.interestRate)
 
-        val capitalRecoveryFactor = calculateCapitalRecoveryFactor(
+        val crfParams = CapitalRecoveryFactorParams(
             periodicRate = periodicInterestRate,
-            termInMonths = loanRequest.termInMonths
+            termInMonths = loanRequest.termInMonths,
+            amount = loanRequest.loanAmount
         )
-        val installmentAmountRounded = loanRequest.loanAmount
-            .multiply(capitalRecoveryFactor, MC_CALCULATION)
+        
+        val installmentAmountRounded = capitalRecoveryFactorCalculator
+            .calculatePayment(crfParams)
             .roundToDisplayScale()
 
         var currentBalance = loanRequest.loanAmount
@@ -69,8 +72,9 @@ class TraditionalCalculatorServiceImpl(
         rate: Rate
     ) = periodicRateCalculator.calculateDecimalPeriodicRate(rate)
 
-    private fun calculateCapitalRecoveryFactor(
+    private fun calculatePayment(
         periodicRate: BigDecimal,
-        termInMonths: Int
-    ) = capitalRecoveryFactorCalculator.calculate(periodicRate, termInMonths)
+        termInMonths: Int,
+        amount: BigDecimal
+    ) = capitalRecoveryFactorCalculator.calculatePayment(periodicRate, termInMonths, amount)
 }
